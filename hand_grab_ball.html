@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>手抓球</title>
+<style>
+  :root {
+    --bg: #14213d;
+    --ink: #f3efe6;
+    --muted: #9aa3b8;
+    --open: #4ade80;
+    --fist: #fbbf24;
+    --ball: #ff6b4a;
+    --held: #7dd3fc;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px;
+    gap: 16px;
+  }
+  h1 { font-size: 22px; font-weight: 600; letter-spacing: 0.04em; }
+  .stage {
+    position: relative;
+    width: min(100%, 960px);
+    aspect-ratio: 4 / 3;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #0b1224;
+    box-shadow: 0 12px 40px rgba(0,0,0,.45);
+  }
+  video { display: none; }
+  canvas { width: 100%; height: 100%; display: block; }
+  .overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; text-align: center; padding: 24px;
+    background: rgba(11,18,36,.85);
+  }
+  .overlay.hidden { display: none; }
+  button {
+    font: inherit; font-size: 17px; font-weight: 600;
+    color: #14213d; background: var(--ink);
+    border: 0; border-radius: 999px; padding: 12px 28px; cursor: pointer;
+  }
+  button:focus-visible { outline: 3px solid var(--held); outline-offset: 3px; }
+  .status {
+    position: absolute; top: 14px; left: 16px;
+    font-size: 15px; font-weight: 600; padding: 6px 12px;
+    border-radius: 999px; background: rgba(0,0,0,.45);
+  }
+  .controls { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; font-size: 14px; color: var(--muted); }
+  .controls label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  p.help { color: var(--muted); font-size: 14px; max-width: 60ch; text-align: center; line-height: 1.6; }
+</style>
+</head>
+<body>
+  <h1>手抓球</h1>
+
+  <div class="stage">
+    <video id="video" playsinline></video>
+    <canvas id="canvas" width="960" height="720"></canvas>
+    <div id="status" class="status">尚未啟動</div>
+    <div id="overlay" class="overlay">
+      <p>把手放到鏡頭前，畫面裡的手會跟著你動。<br>手張開靠近球，握拳就能抓住；張開手就放開。</p>
+      <button id="start">開啟鏡頭</button>
+      <p id="err" style="color:#fca5a5"></p>
+    </div>
+  </div>
+
+  <div class="controls">
+    <label><input type="checkbox" id="showCam" checked> 顯示鏡頭畫面</label>
+    <label><input type="checkbox" id="gravity" checked> 放開後球會掉落</label>
+    <button id="reset" style="padding:6px 16px;font-size:14px">球回到中間</button>
+  </div>
+  <p class="help">建議使用 Chrome 或 Edge。若直接開啟檔案無法取用鏡頭，請放到本機伺服器或 https 網址下開啟。</p>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+    const overlay = document.getElementById('overlay');
+    const errEl = document.getElementById('err');
+    const showCam = document.getElementById('showCam');
+    const gravityBox = document.getElementById('gravity');
+    const W = canvas.width, H = canvas.height;
+
+    // ---- 參數 ----
+    const BALL_R = 42;
+    const GRAB_DIST = 90;      // 手掌中心離球多近可以抓
+    const CLOSE_RATIO = 1.45;  // 指尖/指根 距離比例低於此值視為握拳
+    const GRAVITY = 0.6, BOUNCE = 0.6;
+
+    // ---- 球的狀態 ----
+    let ball = { x: W / 2, y: H / 2, vx: 0, vy: 0, held: false };
+    let prevPalm = null;
+
+    const CONNECTIONS = [
+      [0,1],[1,2],[2,3],[3,4],
+      [0,5],[5,6],[6,7],[7,8],
+      [5,9],[9,10],[10,11],[11,12],
+      [9,13],[13,14],[14,15],[15,16],
+      [13,17],[17,18],[18,19],[19,20],[0,17]
+    ];
+
+    function palmCenter(lm) {
+      const ids = [0, 5, 9, 13, 17];
+      let x = 0, y = 0;
+      for (const i of ids) { x += lm[i].x; y += lm[i].y; }
+      // 鏡像：x 反轉
+      return { x: (1 - x / ids.length) * W, y: (y / ids.length) * H };
+    }
+
+    function isClosed(lm) {
+      const wrist = lm[0];
+      const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+      const tips = [8, 12, 16, 20], bases = [5, 9, 13, 17];
+      let sum = 0;
+      for (let i = 0; i < 4; i++) sum += d(lm[tips[i]], wrist) / (d(lm[bases[i]], wrist) + 1e-6);
+      return sum / 4 < CLOSE_RATIO;
+    }
+
+    function drawHand(lm, color) {
+      const pt = i => ({ x: (1 - lm[i].x) * W, y: lm[i].y * H });
+      ctx.lineWidth = 4; ctx.strokeStyle = '#ffffff'; ctx.lineCap = 'round';
+      for (const [a, b] of CONNECTIONS) {
+        const p = pt(a), q = pt(b);
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
+      }
+      ctx.fillStyle = color;
+      for (let i = 0; i < 21; i++) {
+        const p = pt(i);
+        ctx.beginPath(); ctx.arc(p.x, p.y, i % 4 === 0 && i > 0 ? 8 : 5, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    function drawBall() {
+      const c = ball.held ? getComputedStyle(document.documentElement).getPropertyValue('--held')
+                          : getComputedStyle(document.documentElement).getPropertyValue('--ball');
+      ctx.beginPath(); ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2);
+      ctx.fillStyle = c.trim(); ctx.fill();
+      ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.stroke();
+      ctx.beginPath(); ctx.arc(ball.x - 13, ball.y - 13, 11, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill();
+    }
+
+    function physics() {
+      if (ball.held) return;
+      if (gravityBox.checked) ball.vy += GRAVITY;
+      ball.x += ball.vx; ball.y += ball.vy;
+      ball.vx *= 0.995;
+      if (ball.y + BALL_R > H) { ball.y = H - BALL_R; ball.vy = -ball.vy * BOUNCE; if (Math.abs(ball.vy) < 1) ball.vy = 0; }
+      if (ball.y - BALL_R < 0) { ball.y = BALL_R; ball.vy = -ball.vy * BOUNCE; }
+      if (ball.x - BALL_R < 0) { ball.x = BALL_R; ball.vx = -ball.vx * BOUNCE; }
+      if (ball.x + BALL_R > W) { ball.x = W - BALL_R; ball.vx = -ball.vx * BOUNCE; }
+    }
+
+    function onResults(results) {
+      ctx.clearRect(0, 0, W, H);
+      if (showCam.checked) {
+        ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1);
+        ctx.drawImage(results.image, 0, 0, W, H);
+        ctx.restore();
+        ctx.fillStyle = 'rgba(11,18,36,.35)'; ctx.fillRect(0, 0, W, H);
+      }
+
+      let palm = null, closed = false;
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length) {
+        const lm = results.multiHandLandmarks[0];
+        palm = palmCenter(lm);
+        closed = isClosed(lm);
+        drawHand(lm, closed ? '#fbbf24' : '#4ade80');
+        ctx.beginPath(); ctx.arc(palm.x, palm.y, 10, 0, Math.PI * 2);
+        ctx.fillStyle = closed ? '#fbbf24' : '#4ade80'; ctx.fill();
+      }
+
+      // 抓球邏輯
+      if (palm) {
+        const dist = Math.hypot(palm.x - ball.x, palm.y - ball.y);
+        if (!ball.held && closed && dist < GRAB_DIST) ball.held = true;
+        if (ball.held && !closed) {
+          ball.held = false;
+          // 放開時給球手的速度，可以丟出去
+          if (prevPalm) { ball.vx = (palm.x - prevPalm.x) * 0.8; ball.vy = (palm.y - prevPalm.y) * 0.8; }
+        }
+        if (ball.held) { ball.x = palm.x; ball.y = palm.y; }
+        prevPalm = palm;
+      } else {
+        ball.held = false; prevPalm = null;
+      }
+
+      physics();
+      drawBall();
+
+      statusEl.textContent = !palm ? '找不到手' : ball.held ? '抓住球了' : closed ? '握拳' : '手張開';
+      statusEl.style.color = ball.held ? '#7dd3fc' : closed ? '#fbbf24' : palm ? '#4ade80' : '#f3efe6';
+    }
+
+    const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+    hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.7, minTrackingConfidence: 0.6 });
+    hands.onResults(onResults);
+
+    document.getElementById('start').addEventListener('click', async () => {
+      errEl.textContent = '';
+      try {
+        const camera = new Camera(video, {
+          onFrame: async () => { await hands.send({ image: video }); },
+          width: 960, height: 720
+        });
+        await camera.start();
+        overlay.classList.add('hidden');
+        statusEl.textContent = '載入模型中…';
+      } catch (e) {
+        errEl.textContent = '無法開啟鏡頭：' + (e.message || e);
+      }
+    });
+
+    document.getElementById('reset').addEventListener('click', () => {
+      ball = { x: W / 2, y: H / 2, vx: 0, vy: 0, held: false };
+    });
+  </script>
+</body>
+</html>
