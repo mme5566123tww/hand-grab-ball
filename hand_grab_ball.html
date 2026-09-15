@@ -2,88 +2,75 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>手抓球</title>
 <style>
-  :root {
-    --bg: #14213d;
-    --ink: #f3efe6;
-    --muted: #9aa3b8;
-    --open: #4ade80;
-    --fist: #fbbf24;
-    --ball: #ff6b4a;
-    --held: #7dd3fc;
-  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
   body {
-    background: var(--bg);
-    color: var(--ink);
+    color: #f3efe6;
     font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 24px 16px;
-    gap: 16px;
-  }
-  h1 { font-size: 22px; font-weight: 600; letter-spacing: 0.04em; }
-  .stage {
-    position: relative;
-    width: min(100%, 960px);
-    aspect-ratio: 4 / 3;   /* 開啟鏡頭後會依鏡頭實際比例更新 */
-    max-height: 85vh;
-    border-radius: 14px;
-    overflow: hidden;
-    background: #0b1224;
-    box-shadow: 0 12px 40px rgba(0,0,0,.45);
+    -webkit-user-select: none; user-select: none;
   }
   video { display: none; }
-  canvas { width: 100%; height: 100%; display: block; }
-  .overlay {
-    position: absolute; inset: 0;
+  #canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
+
+  /* 狀態標籤 */
+  #status {
+    position: fixed; top: calc(14px + env(safe-area-inset-top)); left: 16px;
+    font-size: 15px; font-weight: 600; padding: 7px 14px;
+    border-radius: 999px; background: rgba(0,0,0,.5); backdrop-filter: blur(6px);
+    pointer-events: none;
+  }
+
+  /* 底部控制列 */
+  #bar {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    padding: 12px 16px calc(14px + env(safe-area-inset-bottom));
+    display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap;
+    background: linear-gradient(to top, rgba(0,0,0,.6), rgba(0,0,0,0));
+    font-size: 14px;
+  }
+  #bar label { display: flex; align-items: center; gap: 6px; padding: 8px 12px;
+    border-radius: 999px; background: rgba(0,0,0,.45); backdrop-filter: blur(6px); cursor: pointer; }
+  #bar button { font: inherit; font-weight: 600; color: #fff; background: rgba(255,255,255,.18);
+    border: 1px solid rgba(255,255,255,.35); border-radius: 999px; padding: 8px 16px; cursor: pointer; backdrop-filter: blur(6px); }
+
+  /* 開始畫面 */
+  #overlay {
+    position: fixed; inset: 0; z-index: 10;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 14px; text-align: center; padding: 24px;
-    background: rgba(11,18,36,.85);
+    gap: 18px; text-align: center; padding: 32px;
+    background: #14213d;
   }
-  .overlay.hidden { display: none; }
-  button {
-    font: inherit; font-size: 17px; font-weight: 600;
-    color: #14213d; background: var(--ink);
-    border: 0; border-radius: 999px; padding: 12px 28px; cursor: pointer;
-  }
-  button:focus-visible { outline: 3px solid var(--held); outline-offset: 3px; }
-  .status {
-    position: absolute; top: 14px; left: 16px;
-    font-size: 15px; font-weight: 600; padding: 6px 12px;
-    border-radius: 999px; background: rgba(0,0,0,.45);
-  }
-  .controls { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; font-size: 14px; color: var(--muted); }
-  .controls label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
-  p.help { color: var(--muted); font-size: 14px; max-width: 60ch; text-align: center; line-height: 1.6; }
+  #overlay.hidden { display: none; }
+  #overlay h1 { font-size: 30px; font-weight: 700; letter-spacing: .06em; }
+  #overlay p { color: #b8c0d4; line-height: 1.7; max-width: 34ch; }
+  #start { font: inherit; font-size: 18px; font-weight: 700; color: #14213d; background: #f3efe6;
+    border: 0; border-radius: 999px; padding: 14px 36px; cursor: pointer; }
+  #err { color: #fca5a5; font-size: 14px; }
 </style>
 </head>
 <body>
-  <h1>手抓球</h1>
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="canvas"></canvas>
+  <div id="status">尚未啟動</div>
 
-  <div class="stage">
-    <video id="video" playsinline></video>
-    <canvas id="canvas" width="1280" height="720"></canvas>
-    <div id="status" class="status">尚未啟動</div>
-    <div id="overlay" class="overlay">
-      <p>把手放到鏡頭前，畫面裡的手會跟著你動。<br>手張開靠近球，握拳就能抓住；張開手就放開。</p>
-      <button id="start">開啟鏡頭</button>
-      <p id="err" style="color:#fca5a5"></p>
-    </div>
+  <div id="bar">
+    <label><input type="checkbox" id="showCam" checked> 鏡頭畫面</label>
+    <label><input type="checkbox" id="gravity" checked> 重力</label>
+    <button id="reset">球回中間</button>
   </div>
 
-  <div class="controls">
-    <label><input type="checkbox" id="showCam" checked> 顯示鏡頭畫面</label>
-    <label><input type="checkbox" id="gravity" checked> 放開後球會掉落</label>
-    <button id="reset" style="padding:6px 16px;font-size:14px">球回到中間</button>
+  <div id="overlay">
+    <h1>手抓球</h1>
+    <p>把手放到鏡頭前，畫面裡的手會跟著你動。<br>手張開靠近球，握拳就能抓住；張開手就放開。</p>
+    <button id="start">開啟鏡頭</button>
+    <p id="err"></p>
   </div>
-  <p class="help">建議使用 Chrome 或 Edge。若直接開啟檔案無法取用鏡頭，請放到本機伺服器或 https 網址下開啟。</p>
 
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
   <script>
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
@@ -93,45 +80,50 @@
     const errEl = document.getElementById('err');
     const showCam = document.getElementById('showCam');
     const gravityBox = document.getElementById('gravity');
-    let W = canvas.width, H = canvas.height;
-    const stage = document.querySelector('.stage');
 
-    // ---- 參數 ----
-    let BALL_R = 42;
-    const grabDist = () => BALL_R * 2.2;   // 手掌中心離球多近可以抓
-    const CLOSE_RATIO = 1.45;  // 指尖/指根 距離比例低於此值視為握拳
+    // 畫布 = 整個螢幕
+    let W = 0, H = 0;
+    // 鏡頭影像以「填滿裁切」方式鋪滿螢幕（像相機 App），這是影像實際貼上的位置
+    let view = { x: 0, y: 0, w: 0, h: 0 };
+    let BALL_R = 40;
+
+    const CLOSE_RATIO = 1.45;
     const GRAVITY = 0.6, BOUNCE = 0.6;
+    const grabDist = () => BALL_R * 2.2;
 
-    // 讓畫布尺寸永遠等於鏡頭的實際解析度，避免拉伸失真
-    function fitCanvasToVideo() {
-      const vw = video.videoWidth, vh = video.videoHeight;
-      if (!vw || !vh) return;
-      if (vw === W && vh === H) return;
-      const sx = vw / W, sy = vh / H;
-      ball.x *= sx; ball.y *= sy;            // 球的位置跟著換算
-      W = canvas.width = vw; H = canvas.height = vh;
-      BALL_R = Math.round(Math.min(W, H) * 0.06);
-      stage.style.aspectRatio = `${vw} / ${vh}`;
-    }
-
-    // ---- 球的狀態 ----
-    let ball = { x: W / 2, y: H / 2, vx: 0, vy: 0, held: false };
+    // 球用「相對比例」儲存，螢幕轉向或改變大小時位置不會跑掉
+    let ball = { fx: 0.5, fy: 0.5, vx: 0, vy: 0, held: false };
     let prevPalm = null;
 
     const CONNECTIONS = [
-      [0,1],[1,2],[2,3],[3,4],
-      [0,5],[5,6],[6,7],[7,8],
-      [5,9],[9,10],[10,11],[11,12],
-      [9,13],[13,14],[14,15],[15,16],
-      [13,17],[17,18],[18,19],[19,20],[0,17]
+      [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+      [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]
     ];
+
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      W = canvas.width = Math.round(window.innerWidth * dpr);
+      H = canvas.height = Math.round(window.innerHeight * dpr);
+      BALL_R = Math.round(Math.min(W, H) * 0.07);
+      layoutVideo();
+    }
+
+    function layoutVideo() {
+      const vw = video.videoWidth, vh = video.videoHeight;
+      if (!vw || !vh) { view = { x: 0, y: 0, w: W, h: H }; return; }
+      const s = Math.max(W / vw, H / vh);   // cover：放大到填滿並裁掉多餘部分
+      view.w = vw * s; view.h = vh * s;
+      view.x = (W - view.w) / 2; view.y = (H - view.h) / 2;
+    }
+
+    // MediaPipe 的座標是相對於鏡頭影像 (0~1)，轉成螢幕座標（含鏡像）
+    const toScreen = p => ({ x: view.x + (1 - p.x) * view.w, y: view.y + p.y * view.h });
 
     function palmCenter(lm) {
       const ids = [0, 5, 9, 13, 17];
       let x = 0, y = 0;
       for (const i of ids) { x += lm[i].x; y += lm[i].y; }
-      // 鏡像：x 反轉
-      return { x: (1 - x / ids.length) * W, y: (y / ids.length) * H };
+      return toScreen({ x: x / ids.length, y: y / ids.length });
     }
 
     function isClosed(lm) {
@@ -144,47 +136,48 @@
     }
 
     function drawHand(lm, color) {
-      const pt = i => ({ x: (1 - lm[i].x) * W, y: lm[i].y * H });
-      ctx.lineWidth = 4; ctx.strokeStyle = '#ffffff'; ctx.lineCap = 'round';
+      const k = Math.max(1, Math.min(W, H) / 400);
+      ctx.lineWidth = 4 * k; ctx.strokeStyle = '#fff'; ctx.lineCap = 'round';
       for (const [a, b] of CONNECTIONS) {
-        const p = pt(a), q = pt(b);
+        const p = toScreen(lm[a]), q = toScreen(lm[b]);
         ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
       }
       ctx.fillStyle = color;
       for (let i = 0; i < 21; i++) {
-        const p = pt(i);
-        ctx.beginPath(); ctx.arc(p.x, p.y, i % 4 === 0 && i > 0 ? 8 : 5, 0, Math.PI * 2); ctx.fill();
+        const p = toScreen(lm[i]);
+        ctx.beginPath(); ctx.arc(p.x, p.y, (i % 4 === 0 && i > 0 ? 8 : 5) * k, 0, Math.PI * 2); ctx.fill();
       }
     }
 
-    function drawBall() {
-      const c = ball.held ? getComputedStyle(document.documentElement).getPropertyValue('--held')
-                          : getComputedStyle(document.documentElement).getPropertyValue('--ball');
-      ctx.beginPath(); ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2);
-      ctx.fillStyle = c.trim(); ctx.fill();
+    function drawBall(bx, by) {
+      ctx.beginPath(); ctx.arc(bx, by, BALL_R, 0, Math.PI * 2);
+      ctx.fillStyle = ball.held ? '#7dd3fc' : '#ff6b4a'; ctx.fill();
       ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.stroke();
-      ctx.beginPath(); ctx.arc(ball.x - 13, ball.y - 13, 11, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(bx - BALL_R * .3, by - BALL_R * .3, BALL_R * .26, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill();
     }
 
     function physics() {
       if (ball.held) return;
-      if (gravityBox.checked) ball.vy += GRAVITY;
-      ball.x += ball.vx; ball.y += ball.vy;
-      ball.vx *= 0.995;
-      if (ball.y + BALL_R > H) { ball.y = H - BALL_R; ball.vy = -ball.vy * BOUNCE; if (Math.abs(ball.vy) < 1) ball.vy = 0; }
-      if (ball.y - BALL_R < 0) { ball.y = BALL_R; ball.vy = -ball.vy * BOUNCE; }
-      if (ball.x - BALL_R < 0) { ball.x = BALL_R; ball.vx = -ball.vx * BOUNCE; }
-      if (ball.x + BALL_R > W) { ball.x = W - BALL_R; ball.vx = -ball.vx * BOUNCE; }
+      let bx = ball.fx * W, by = ball.fy * H;
+      if (gravityBox.checked) ball.vy += GRAVITY * (H / 720);
+      bx += ball.vx; by += ball.vy; ball.vx *= 0.995;
+      if (by + BALL_R > H) { by = H - BALL_R; ball.vy = -ball.vy * BOUNCE; if (Math.abs(ball.vy) < 1) ball.vy = 0; }
+      if (by - BALL_R < 0) { by = BALL_R; ball.vy = -ball.vy * BOUNCE; }
+      if (bx - BALL_R < 0) { bx = BALL_R; ball.vx = -ball.vx * BOUNCE; }
+      if (bx + BALL_R > W) { bx = W - BALL_R; ball.vx = -ball.vx * BOUNCE; }
+      ball.fx = bx / W; ball.fy = by / H;
     }
 
     function onResults(results) {
       ctx.clearRect(0, 0, W, H);
       if (showCam.checked) {
-        ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1);
-        ctx.drawImage(results.image, 0, 0, W, H);
+        ctx.save();
+        ctx.translate(W, 0); ctx.scale(-1, 1);  // 鏡像
+        ctx.drawImage(results.image, W - view.x - view.w, view.y, view.w, view.h);
         ctx.restore();
-        ctx.fillStyle = 'rgba(11,18,36,.35)'; ctx.fillRect(0, 0, W, H);
+      } else {
+        ctx.fillStyle = '#14213d'; ctx.fillRect(0, 0, W, H);
       }
 
       let palm = null, closed = false;
@@ -193,42 +186,39 @@
         palm = palmCenter(lm);
         closed = isClosed(lm);
         drawHand(lm, closed ? '#fbbf24' : '#4ade80');
-        ctx.beginPath(); ctx.arc(palm.x, palm.y, 10, 0, Math.PI * 2);
+        ctx.beginPath(); ctx.arc(palm.x, palm.y, BALL_R * .25, 0, Math.PI * 2);
         ctx.fillStyle = closed ? '#fbbf24' : '#4ade80'; ctx.fill();
       }
 
-      // 抓球邏輯
+      let bx = ball.fx * W, by = ball.fy * H;
       if (palm) {
-        const dist = Math.hypot(palm.x - ball.x, palm.y - ball.y);
+        const dist = Math.hypot(palm.x - bx, palm.y - by);
         if (!ball.held && closed && dist < grabDist()) ball.held = true;
         if (ball.held && !closed) {
           ball.held = false;
-          // 放開時給球手的速度，可以丟出去
           if (prevPalm) { ball.vx = (palm.x - prevPalm.x) * 0.8; ball.vy = (palm.y - prevPalm.y) * 0.8; }
         }
-        if (ball.held) { ball.x = palm.x; ball.y = palm.y; }
+        if (ball.held) { ball.fx = palm.x / W; ball.fy = palm.y / H; }
         prevPalm = palm;
-      } else {
-        ball.held = false; prevPalm = null;
-      }
+      } else { ball.held = false; prevPalm = null; }
 
       physics();
-      drawBall();
+      drawBall(ball.fx * W, ball.fy * H);
 
       statusEl.textContent = !palm ? '找不到手' : ball.held ? '抓住球了' : closed ? '握拳' : '手張開';
-      statusEl.style.color = ball.held ? '#7dd3fc' : closed ? '#fbbf24' : palm ? '#4ade80' : '#f3efe6';
+      statusEl.style.color = ball.held ? '#7dd3fc' : closed ? '#fbbf24' : palm ? '#4ade80' : '#fff';
     }
 
     const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-    hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.7, minTrackingConfidence: 0.6 });
+    hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
     hands.onResults(onResults);
 
-    let running = false;
+    let running = false, busy = false;
     async function loop() {
       if (!running) return;
-      if (video.readyState >= 2) {
-        fitCanvasToVideo();
-        await hands.send({ image: video });
+      if (video.readyState >= 2 && !busy) {
+        busy = true;
+        try { await hands.send({ image: video }); } finally { busy = false; }
       }
       requestAnimationFrame(loop);
     }
@@ -236,30 +226,36 @@
     document.getElementById('start').addEventListener('click', async () => {
       errEl.textContent = '';
       try {
+        const portrait = window.innerHeight > window.innerWidth;
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: { facingMode: 'user',
+                   width: { ideal: portrait ? 720 : 1280 },
+                   height: { ideal: portrait ? 1280 : 720 } },
           audio: false
         });
         video.srcObject = stream;
         await new Promise(r => video.onloadedmetadata = r);
         await video.play();
-        fitCanvasToVideo();
+        resize();
         overlay.classList.add('hidden');
         statusEl.textContent = '載入模型中…';
         running = true;
         loop();
+        // 手機瀏覽器全螢幕（若支援）
+        if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
       } catch (e) {
         errEl.textContent = '無法開啟鏡頭：' + (e.message || e);
       }
     });
 
-    // 手機轉向時鏡頭比例會改變，重新對齊
-    window.addEventListener('resize', fitCanvasToVideo);
-    if (screen.orientation) screen.orientation.addEventListener('change', () => setTimeout(fitCanvasToVideo, 300));
-
     document.getElementById('reset').addEventListener('click', () => {
-      ball = { x: W / 2, y: H / 2, vx: 0, vy: 0, held: false };
+      ball = { fx: 0.5, fy: 0.5, vx: 0, vy: 0, held: false };
     });
+
+    window.addEventListener('resize', resize);
+    if (screen.orientation) screen.orientation.addEventListener('change', () => setTimeout(resize, 300));
+    video.addEventListener('resize', layoutVideo);   // 鏡頭轉向後解析度改變
+    resize();
   </script>
 </body>
 </html>
