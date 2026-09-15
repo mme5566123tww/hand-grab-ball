@@ -65,7 +65,7 @@
 
   <div id="overlay">
     <h1>手抓球</h1>
-    <p>把手放到鏡頭前，畫面裡的手會跟著你動。<br>手張開靠近球，握拳就能抓住；張開手就放開。</p>
+    <p>把手放到鏡頭前，畫面裡的手會跟著你動。<br>手張開靠近球，握拳就能抓住；張開手就放開。<br>比出 🤘（食指＋小指伸直）會從手上噴出煙火。</p>
     <button id="start">開啟鏡頭</button>
     <p id="err"></p>
   </div>
@@ -104,14 +104,17 @@
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       W = canvas.width = Math.round(window.innerWidth * dpr);
       H = canvas.height = Math.round(window.innerHeight * dpr);
-      BALL_R = Math.round(Math.min(W, H) * 0.07);
+      BALL_R = Math.round(Math.min(W, H) * 0.08);
       layoutVideo();
     }
 
     function layoutVideo() {
       const vw = video.videoWidth, vh = video.videoHeight;
       if (!vw || !vh) { view = { x: 0, y: 0, w: W, h: H }; return; }
-      const s = Math.max(W / vw, H / vh);   // cover：放大到填滿並裁掉多餘部分
+      // 像相機 App：維持原比例放到最大，不裁切；多出來的地方留黑邊
+      // 若只需裁掉不到 15% 就能填滿，則直接填滿
+      const cover = Math.max(W / vw, H / vh), contain = Math.min(W / vw, H / vh);
+      const s = cover / contain <= 1.15 ? cover : contain;
       view.w = vw * s; view.h = vh * s;
       view.x = (W - view.w) / 2; view.y = (H - view.h) / 2;
     }
@@ -134,6 +137,65 @@
       for (let i = 0; i < 4; i++) sum += d(lm[tips[i]], wrist) / (d(lm[bases[i]], wrist) + 1e-6);
       return sum / 4 < CLOSE_RATIO;
     }
+
+    // ---- 🤘 手勢偵測：食指與小指伸直，中指與無名指彎曲 ----
+    function isRockSign(lm) {
+      const wrist = lm[0];
+      const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+      const ext = (tip, base) => d(lm[tip], wrist) / (d(lm[base], wrist) + 1e-6);
+      const index = ext(8, 5), middle = ext(12, 9), ring = ext(16, 13), pinky = ext(20, 17);
+      return index > 1.6 && pinky > 1.5 && middle < 1.25 && ring < 1.25;
+    }
+
+    // ---- 煙火粒子 ----
+    const fireworks = [];   // 上升中的火箭
+    const particles = [];   // 爆開後的粒子
+    const COLORS = ['#ff6b4a', '#fbbf24', '#4ade80', '#7dd3fc', '#f472b6', '#c084fc', '#fff'];
+
+    function launchFireworks(x, y) {
+      const k = Math.min(W, H) / 400;
+      for (let i = 0; i < 5; i++) {
+        fireworks.push({
+          x, y, vx: (Math.random() - 0.5) * 6 * k,
+          vy: -(11 + Math.random() * 6) * k,
+          life: 25 + Math.random() * 15,
+          color: COLORS[Math.floor(Math.random() * COLORS.length)]
+        });
+      }
+    }
+
+    function explode(f) {
+      const k = Math.min(W, H) / 400;
+      const n = 50;
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + Math.random() * 0.2;
+        const sp = (2 + Math.random() * 5) * k;
+        particles.push({ x: f.x, y: f.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+          life: 1, decay: 0.012 + Math.random() * 0.015, color: f.color, r: (2 + Math.random() * 2) * k });
+      }
+    }
+
+    function updateFireworks() {
+      const k = Math.min(W, H) / 400;
+      for (let i = fireworks.length - 1; i >= 0; i--) {
+        const f = fireworks[i];
+        f.x += f.vx; f.y += f.vy; f.vy += 0.25 * k; f.life--;
+        ctx.beginPath(); ctx.arc(f.x, f.y, 3 * k, 0, Math.PI * 2);
+        ctx.fillStyle = f.color; ctx.fill();
+        if (f.life <= 0 || f.vy > 0) { explode(f); fireworks.splice(i, 1); }
+      }
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx; p.y += p.vy; p.vy += 0.06 * k; p.vx *= 0.97; p.vy *= 0.97;
+        p.life -= p.decay;
+        if (p.life <= 0) { particles.splice(i, 1); continue; }
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r * p.life, 0, Math.PI * 2);
+        ctx.fillStyle = p.color; ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+    let rockHeld = false;   // 手勢是否持續中（每次做手勢只噴一次）
 
     function drawHand(lm, color) {
       const k = Math.max(1, Math.min(W, H) / 400);
@@ -160,32 +222,34 @@
     function physics() {
       if (ball.held) return;
       let bx = ball.fx * W, by = ball.fy * H;
+      const L = Math.max(0, view.x), R = Math.min(W, view.x + view.w);
+      const T = Math.max(0, view.y), B = Math.min(H, view.y + view.h);
       if (gravityBox.checked) ball.vy += GRAVITY * (H / 720);
       bx += ball.vx; by += ball.vy; ball.vx *= 0.995;
-      if (by + BALL_R > H) { by = H - BALL_R; ball.vy = -ball.vy * BOUNCE; if (Math.abs(ball.vy) < 1) ball.vy = 0; }
-      if (by - BALL_R < 0) { by = BALL_R; ball.vy = -ball.vy * BOUNCE; }
-      if (bx - BALL_R < 0) { bx = BALL_R; ball.vx = -ball.vx * BOUNCE; }
-      if (bx + BALL_R > W) { bx = W - BALL_R; ball.vx = -ball.vx * BOUNCE; }
+      if (by + BALL_R > B) { by = B - BALL_R; ball.vy = -ball.vy * BOUNCE; if (Math.abs(ball.vy) < 1) ball.vy = 0; }
+      if (by - BALL_R < T) { by = T + BALL_R; ball.vy = -ball.vy * BOUNCE; }
+      if (bx - BALL_R < L) { bx = L + BALL_R; ball.vx = -ball.vx * BOUNCE; }
+      if (bx + BALL_R > R) { bx = R - BALL_R; ball.vx = -ball.vx * BOUNCE; }
       ball.fx = bx / W; ball.fy = by / H;
     }
 
     function onResults(results) {
-      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = showCam.checked ? '#000' : '#14213d';
+      ctx.fillRect(0, 0, W, H);
       if (showCam.checked) {
         ctx.save();
         ctx.translate(W, 0); ctx.scale(-1, 1);  // 鏡像
         ctx.drawImage(results.image, W - view.x - view.w, view.y, view.w, view.h);
         ctx.restore();
-      } else {
-        ctx.fillStyle = '#14213d'; ctx.fillRect(0, 0, W, H);
       }
 
-      let palm = null, closed = false;
+      let palm = null, closed = false, rock = false;
       if (results.multiHandLandmarks && results.multiHandLandmarks.length) {
         const lm = results.multiHandLandmarks[0];
         palm = palmCenter(lm);
-        closed = isClosed(lm);
-        drawHand(lm, closed ? '#fbbf24' : '#4ade80');
+        rock = isRockSign(lm);
+        closed = !rock && isClosed(lm);
+        drawHand(lm, rock ? '#f472b6' : closed ? '#fbbf24' : '#4ade80');
         ctx.beginPath(); ctx.arc(palm.x, palm.y, BALL_R * .25, 0, Math.PI * 2);
         ctx.fillStyle = closed ? '#fbbf24' : '#4ade80'; ctx.fill();
       }
@@ -202,11 +266,16 @@
         prevPalm = palm;
       } else { ball.held = false; prevPalm = null; }
 
+      // 🤘 只在「剛擺出手勢」的那一刻噴一次；放掉手勢後再擺才會再噴
+      if (rock && !rockHeld) launchFireworks(palm.x, palm.y);
+      rockHeld = rock;
+
       physics();
       drawBall(ball.fx * W, ball.fy * H);
+      updateFireworks();
 
-      statusEl.textContent = !palm ? '找不到手' : ball.held ? '抓住球了' : closed ? '握拳' : '手張開';
-      statusEl.style.color = ball.held ? '#7dd3fc' : closed ? '#fbbf24' : palm ? '#4ade80' : '#fff';
+      statusEl.textContent = !palm ? '找不到手' : rock ? '🤘 煙火！' : ball.held ? '抓住球了' : closed ? '握拳' : '手張開';
+      statusEl.style.color = rock ? '#f472b6' : ball.held ? '#7dd3fc' : closed ? '#fbbf24' : palm ? '#4ade80' : '#fff';
     }
 
     const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
