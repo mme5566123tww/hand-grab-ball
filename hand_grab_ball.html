@@ -30,7 +30,8 @@
   .stage {
     position: relative;
     width: min(100%, 960px);
-    aspect-ratio: 4 / 3;
+    aspect-ratio: 4 / 3;   /* 開啟鏡頭後會依鏡頭實際比例更新 */
+    max-height: 85vh;
     border-radius: 14px;
     overflow: hidden;
     background: #0b1224;
@@ -66,7 +67,7 @@
 
   <div class="stage">
     <video id="video" playsinline></video>
-    <canvas id="canvas" width="960" height="720"></canvas>
+    <canvas id="canvas" width="1280" height="720"></canvas>
     <div id="status" class="status">尚未啟動</div>
     <div id="overlay" class="overlay">
       <p>把手放到鏡頭前，畫面裡的手會跟著你動。<br>手張開靠近球，握拳就能抓住；張開手就放開。</p>
@@ -82,8 +83,7 @@
   </div>
   <p class="help">建議使用 Chrome 或 Edge。若直接開啟檔案無法取用鏡頭，請放到本機伺服器或 https 網址下開啟。</p>
 
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
   <script>
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
@@ -93,13 +93,26 @@
     const errEl = document.getElementById('err');
     const showCam = document.getElementById('showCam');
     const gravityBox = document.getElementById('gravity');
-    const W = canvas.width, H = canvas.height;
+    let W = canvas.width, H = canvas.height;
+    const stage = document.querySelector('.stage');
 
     // ---- 參數 ----
-    const BALL_R = 42;
-    const GRAB_DIST = 90;      // 手掌中心離球多近可以抓
+    let BALL_R = 42;
+    const grabDist = () => BALL_R * 2.2;   // 手掌中心離球多近可以抓
     const CLOSE_RATIO = 1.45;  // 指尖/指根 距離比例低於此值視為握拳
     const GRAVITY = 0.6, BOUNCE = 0.6;
+
+    // 讓畫布尺寸永遠等於鏡頭的實際解析度，避免拉伸失真
+    function fitCanvasToVideo() {
+      const vw = video.videoWidth, vh = video.videoHeight;
+      if (!vw || !vh) return;
+      if (vw === W && vh === H) return;
+      const sx = vw / W, sy = vh / H;
+      ball.x *= sx; ball.y *= sy;            // 球的位置跟著換算
+      W = canvas.width = vw; H = canvas.height = vh;
+      BALL_R = Math.round(Math.min(W, H) * 0.06);
+      stage.style.aspectRatio = `${vw} / ${vh}`;
+    }
 
     // ---- 球的狀態 ----
     let ball = { x: W / 2, y: H / 2, vx: 0, vy: 0, held: false };
@@ -187,7 +200,7 @@
       // 抓球邏輯
       if (palm) {
         const dist = Math.hypot(palm.x - ball.x, palm.y - ball.y);
-        if (!ball.held && closed && dist < GRAB_DIST) ball.held = true;
+        if (!ball.held && closed && dist < grabDist()) ball.held = true;
         if (ball.held && !closed) {
           ball.held = false;
           // 放開時給球手的速度，可以丟出去
@@ -210,20 +223,39 @@
     hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.7, minTrackingConfidence: 0.6 });
     hands.onResults(onResults);
 
+    let running = false;
+    async function loop() {
+      if (!running) return;
+      if (video.readyState >= 2) {
+        fitCanvasToVideo();
+        await hands.send({ image: video });
+      }
+      requestAnimationFrame(loop);
+    }
+
     document.getElementById('start').addEventListener('click', async () => {
       errEl.textContent = '';
       try {
-        const camera = new Camera(video, {
-          onFrame: async () => { await hands.send({ image: video }); },
-          width: 960, height: 720
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
         });
-        await camera.start();
+        video.srcObject = stream;
+        await new Promise(r => video.onloadedmetadata = r);
+        await video.play();
+        fitCanvasToVideo();
         overlay.classList.add('hidden');
         statusEl.textContent = '載入模型中…';
+        running = true;
+        loop();
       } catch (e) {
         errEl.textContent = '無法開啟鏡頭：' + (e.message || e);
       }
     });
+
+    // 手機轉向時鏡頭比例會改變，重新對齊
+    window.addEventListener('resize', fitCanvasToVideo);
+    if (screen.orientation) screen.orientation.addEventListener('change', () => setTimeout(fitCanvasToVideo, 300));
 
     document.getElementById('reset').addEventListener('click', () => {
       ball = { x: W / 2, y: H / 2, vx: 0, vy: 0, held: false };
